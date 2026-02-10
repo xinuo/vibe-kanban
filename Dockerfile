@@ -42,7 +42,7 @@ RUN cd frontend && pnpm run build
 RUN cargo build --release --bin server
 
 # Runtime stage
-FROM alpine:latest AS runtime
+FROM node:24-alpine AS runtime
 
 # Install runtime dependencies
 RUN apk add --no-cache \
@@ -50,6 +50,11 @@ RUN apk add --no-cache \
     tini \
     libgcc \
     wget
+
+# Install AI CLI tools and clean up cache to reduce image size
+RUN npm install -g @anthropic-ai/claude-code @openai/codex @google/gemini-cli && \
+    npm cache clean --force && \
+    rm -rf /root/.npm /tmp/*
 
 # Create app user for security
 RUN addgroup -g 1001 -S appgroup && \
