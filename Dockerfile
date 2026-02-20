@@ -49,16 +49,40 @@ RUN apk add --no-cache \
     ca-certificates \
     tini \
     libgcc \
-    wget
+    wget \
+    openssh-server \
+    openssh-client \
+    tmux
 
 # Install AI CLI tools and clean up cache to reduce image size
 RUN npm install -g @anthropic-ai/claude-code @openai/codex @google/gemini-cli && \
     npm cache clean --force && \
     rm -rf /root/.npm /tmp/*
 
+# Configure SSH
+RUN mkdir -p /run/sshd && \
+    sed -i 's/#PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config && \
+    sed -i 's/#PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config && \
+    echo 'root:vedyppah' | chpasswd && \
+    ssh-keygen -A
+
+RUN echo 'cd /home/appuser/' >> /root/.bashrc
+
+# Create entrypoint script
+RUN printf '#!/bin/sh\n\
+    # Start SSHD\n\
+    /usr/sbin/sshd\n\
+    \n\
+    # Start the application\n\
+    exec tini -- server\n\
+    ' > /usr/local/bin/entrypoint.sh && \
+    chmod +x /usr/local/bin/entrypoint.sh
+
 # Create app user for security
 RUN addgroup -g 1001 -S appgroup && \
     adduser -u 1001 -S appuser -G appgroup
+
+RUN apk add --no-cache git
 
 # Copy binary from builder
 COPY --from=builder /app/target/release/server /usr/local/bin/server
@@ -67,13 +91,10 @@ COPY --from=builder /app/target/release/server /usr/local/bin/server
 RUN mkdir -p /repos && \
     chown -R appuser:appgroup /repos
 
-# Switch to non-root user
-USER appuser
-
 # Set runtime environment
 ENV HOST=0.0.0.0
 ENV PORT=3000
-EXPOSE 3000
+EXPOSE 3000 22
 
 # Set working directory
 WORKDIR /repos
@@ -82,6 +103,7 @@ WORKDIR /repos
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD wget --quiet --tries=1 --spider "http://${HOST:-localhost}:${PORT:-3000}" || exit 1
 
-# Run the application
-ENTRYPOINT ["/sbin/tini", "--"]
-CMD ["server"]
+# Run the application (using root to start sshd, then app starts via tini)
+# Note: In a production env, it's better to use a process manager like supervisor or a custom entrypoint that manages both
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+
